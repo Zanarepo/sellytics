@@ -1,0 +1,77 @@
+{
+  "name": "sellytics",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@mui/icons-material": "^6.4.3",
+    "@mui/material": "^6.4.3",
+    "@mui/system": "^6.4.3",
+    "@paystack/inline-js": "^2.22.3",
+    "@shadcn/ui": "^0.0.4",
+    "@supabase/supabase-js": "^2.48.1",
+    "@tanstack/react-table": "^8.20.6",
+    "axios": "^1.7.9",
+    "chart.js": "^4.4.7",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "cra-template": "1.2.0",
+    "date-fns": "^4.1.0",
+    "file-saver": "^2.0.5",
+    "framer-motion": "^12.10.4",
+    "html2pdf": "^0.0.11",
+    "html2pdf.js": "^0.10.2",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^5.0.2",
+    "lucide-react": "^0.474.0",
+    "react": "^18.3.1",
+    "react-beautiful-dnd": "^13.1.1",
+    "react-chartjs-2": "^5.3.0",
+    "react-copy-to-clipboard": "^5.1.0",
+    "react-datepicker": "^8.3.0",
+    "react-dom": "^18.3.1",
+    "react-draggable": "^4.4.6",
+    "react-icons": "^5.4.0",
+    "react-paystack": "^6.0.0",
+    "react-qr-barcode-scanner": "^1.0.6",
+    "react-router-dom": "^7.1.1",
+    "react-scripts": "5.0.1",
+    "react-scroll": "^1.9.3",
+    "react-toastify": "^11.0.2",
+    "recharts": "^2.15.3",
+    "web-push": "^3.6.7",
+    "web-vitals": "^4.2.4",
+    "xlsx": "^0.18.5"
+  },
+  
+  "scripts": {
+    "start": "craco start",
+    "build": "craco build",
+    "test": "craco test",
+    "eject": "react-scripts eject"
+  },
+
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
+    "@craco/craco": "^7.1.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.1",
+    "tailwindcss": "^3.4.17"
+  }
+}

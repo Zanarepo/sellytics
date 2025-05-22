@@ -1,0 +1,48 @@
+Public Key:
+BFTTHTZpo52AJnRcC1Xc39U8YZFNTVsTLLmPrqrMiXFZDwT1EwQjFTos5v5TYEsONu5VwuT6R1CovI1iM62-Eak
+
+Private Key:
+daiMNsj8UKOx0uSJlPNEUR30r6XAWH-xnHPiDlrvX5s
+
+
+
+
+CREATE TABLE IF NOT EXISTS secrets (
+    key VARCHAR(255) PRIMARY KEY,
+    anon_key TEXT NOT NULL
+  );
+  
+  INSERT INTO secrets (key, anon_key)
+  VALUES
+    ('SUPABASE_ANON_KEY', 'your-supabase-anon-key'),
+    ('RENDER_API_KEY', 'your-render-api-key')
+  ON CONFLICT (key) DO UPDATE SET anon_key = EXCLUDED.anon_key;
+  
+  CREATE OR REPLACE FUNCTION trigger_push_notification()
+  RETURNS TRIGGER AS $$
+  DECLARE
+    payload jsonb;
+  BEGIN
+    payload := jsonb_build_object(
+      'title', 'New Sale Recorded (ID: ' || NEW.id || ')',
+      'message', 'A sale of ' || NEW.quantity || ' item(s) for $' || NEW.amount || ' was recorded via ' || NEW.payment_method || '.'
+    );
+  
+    PERFORM net.http_post(
+      url := 'https://your-supabase-project.supabase.co/functions/v1/send-push-notification',
+      body := payload,
+      headers := jsonb_build_object(
+        'Authorization', 'Bearer ' || (SELECT anon_key FROM secrets WHERE key = 'SUPABASE_ANON_KEY'),
+        'Content-Type', 'application/json',
+        'x-api-key', (SELECT anon_key FROM secrets WHERE key = 'RENDER_API_KEY')
+      )
+    );
+  
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+  
+  CREATE TRIGGER new_sale_push_trigger
+  AFTER INSERT ON dynamic_sales
+  FOR EACH ROW
+  EXECUTE FUNCTION trigger_push_notification();
