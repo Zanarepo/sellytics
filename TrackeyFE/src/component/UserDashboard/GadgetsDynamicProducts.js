@@ -1,8 +1,9 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../../supabaseClient';
-import { FaEdit, FaTrashAlt, FaPlus } from 'react-icons/fa';
+import { FaEdit, FaTrashAlt, FaPlus, FaCamera } from 'react-icons/fa';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+import { BrowserMultiFormatReader, DecodeHintType, BarcodeFormat } from '@zxing/library';
 
 function DynamicProducts() {
   const storeId = localStorage.getItem('store_id');
@@ -11,12 +12,10 @@ function DynamicProducts() {
   const [products, setProducts] = useState([]);
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
-
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState([
     { name: '', description: '', purchase_price: '', purchase_qty: '', selling_price: '', suppliers_name: '', deviceIds: [''] }
   ]);
-
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({
     name: '',
@@ -26,19 +25,22 @@ function DynamicProducts() {
     suppliers_name: '',
     deviceIds: []
   });
-
   const [showDetail, setShowDetail] = useState(null);
   const [soldDeviceIds, setSoldDeviceIds] = useState([]);
   const [isLoadingSoldStatus, setIsLoadingSoldStatus] = useState(false);
   const [refreshDeviceList, setRefreshDeviceList] = useState(false);
-
+  const [showScanner, setShowScanner] = useState(false);
+  const [scannerTarget, setScannerTarget] = useState(null); // { modal: 'add'|'edit', productIndex: number, deviceIndex: number }
+  const [scannerError, setScannerError] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
   const totalPages = Math.ceil(filtered.length / itemsPerPage);
-
-  // For modal device ID pagination
   const [detailPage, setDetailPage] = useState(1);
   const detailPageSize = 5;
+
+  // ZXing scanner
+  const videoRef = useRef(null);
+  const codeReader = useRef(null);
 
   const filteredDevices = useMemo(() => {
     return showDetail?.deviceList || [];
@@ -51,6 +53,12 @@ function DynamicProducts() {
     const end = start + detailPageSize;
     return filteredDevices.slice(start, end);
   }, [filteredDevices, detailPage]);
+
+  // Validate IMEI (15-digit number)
+  const validateIMEI = (imei) => {
+    const imeiRegex = /^\d{15}$/;
+    return imeiRegex.test(imei);
+  };
 
   // Fetch products
   const fetchProducts = useCallback(async () => {
@@ -96,7 +104,6 @@ function DynamicProducts() {
     setIsLoadingSoldStatus(true);
     try {
       const normalizedIds = deviceIds.map(id => id.trim());
-      console.log("Checking device IDs:", normalizedIds);
       const { data, error } = await supabase
         .from('dynamic_sales')
         .select('device_id')
@@ -105,9 +112,7 @@ function DynamicProducts() {
         console.error('Error fetching sold devices:', error);
         return [];
       }
-      console.log("Response from sales table:", data);
       const soldIds = data.map(item => item.device_id.trim());
-      console.log("Identified sold IDs:", soldIds);
       setSoldDeviceIds(soldIds);
       return soldIds;
     } catch (error) {
@@ -125,6 +130,81 @@ function DynamicProducts() {
       setSoldDeviceIds([]);
     }
   }, [showDetail, checkSoldDevices]);
+
+  // Initialize ZXing scanner
+  useEffect(() => {
+    if (showScanner && videoRef.current) {
+      console.log('Initializing ZXing scanner:', { modal: scannerTarget?.modal, productIndex: scannerTarget?.productIndex, deviceIndex: scannerTarget?.deviceIndex });
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]); // For IMEI barcodes
+      codeReader.current = new BrowserMultiFormatReader(hints);
+
+      codeReader.current
+        .decodeFromVideoDevice(null, videoRef.current, (result, err) => {
+          console.log('ZXing scan:', { result, err });
+          if (result) {
+            const scannedIMEI = result.getText().trim();
+            console.log('Scanned IMEI:', scannedIMEI);
+            if (!validateIMEI(scannedIMEI)) {
+              toast.error('Invalid IMEI: Must be a 15-digit number');
+              setScannerError('Invalid IMEI: Must be a 15-digit number');
+              return;
+            }
+
+            if (scannerTarget) {
+              const { modal, productIndex, deviceIndex } = scannerTarget;
+              if (modal === 'add') {
+                const form = [...addForm];
+                if (form[productIndex].deviceIds.includes(scannedIMEI)) {
+                  toast.error(`Device ID "${scannedIMEI}" already exists in this product`);
+                  setScannerError(`Device ID "${scannedIMEI}" already exists`);
+                  return;
+                }
+                form[productIndex].deviceIds[deviceIndex] = scannedIMEI;
+                setAddForm(form);
+              } else if (modal === 'edit') {
+                if (editForm.deviceIds.some((id, i) => i !== deviceIndex && id.trim() === scannedIMEI)) {
+                  toast.error(`Device ID "${scannedIMEI}" already exists in this product`);
+                  setScannerError(`Device ID "${scannedIMEI}" already exists`);
+                  return;
+                }
+                const arr = [...editForm.deviceIds];
+                arr[deviceIndex] = scannedIMEI;
+                setEditForm(prev => ({ ...prev, deviceIds: arr }));
+              }
+
+              setShowScanner(false);
+              setScannerTarget(null);
+              setScannerError(null);
+              toast.success(`Scanned IMEI: ${scannedIMEI}`);
+            }
+          }
+          if (err && err.name !== 'NotFoundException') {
+            console.error('ZXing Error:', err.name, err.message);
+            setScannerError(`Camera error: ${err.message}`);
+          }
+        })
+        .catch((err) => {
+          console.error('ZXing Initialization Error:', err.name, err.message);
+          setScannerError(`Failed to access camera: ${err.message}`);
+        });
+
+      return () => {
+        console.log('Cleaning up ZXing scanner');
+        if (codeReader.current) {
+          codeReader.current.reset();
+        }
+      };
+    }
+  }, [showScanner, scannerTarget, addForm, editForm]);
+
+  // Open scanner
+  const openScanner = (modal, productIndex, deviceIndex) => {
+    console.log('Opening scanner:', { modal, productIndex, deviceIndex });
+    setScannerTarget({ modal, productIndex, deviceIndex });
+    setShowScanner(true);
+    setScannerError(null);
+  };
 
   // Remove device ID from product (details modal)
   const removeDeviceId = async (deviceId) => {
@@ -225,6 +305,12 @@ function DynamicProducts() {
     for (const p of addForm) {
       if (!p.name.trim() || p.deviceIds.filter(d => d.trim()).length === 0) {
         toast.error('Name and at least one Device ID required');
+        return;
+      }
+      // Validate IMEIs
+      const invalidIMEIs = p.deviceIds.filter(id => id.trim() && !validateIMEI(id.trim()));
+      if (invalidIMEIs.length > 0) {
+        toast.error(`Invalid IMEIs: ${invalidIMEIs.join(', ')}. Must be 15-digit numbers.`);
         return;
       }
     }
@@ -339,6 +425,13 @@ function DynamicProducts() {
       return;
     }
 
+    // Validate IMEIs
+    const invalidIMEIs = cleanedDeviceIds.filter(id => !validateIMEI(id));
+    if (invalidIMEIs.length > 0) {
+      toast.error(`Invalid IMEIs: ${invalidIMEIs.join(', ')}. Must be 15-digit numbers.`);
+      return;
+    }
+
     const uniqueIds = new Set(cleanedDeviceIds);
     if (uniqueIds.size < cleanedDeviceIds.length) {
       toast.error('Duplicate Device IDs detected within this product');
@@ -419,7 +512,7 @@ function DynamicProducts() {
   };
 
   return (
-    <div className="p-4 mt-4 dark:bg-gray-900 dark:text-white">
+    <div className="p-4 mt-4 dark:bg-gray-900 dark:text-white mt-48">
       <ToastContainer />
       <div className="flex gap-2 mb-4">
         <input
@@ -503,7 +596,7 @@ function DynamicProducts() {
                 <div className="mt-4">
                   <label className="block font-semibold text-gray-700 dark:text-gray-300 mb-1">Device IDs</label>
                   {p.deviceIds.map((id, i) => (
-                    <div key={i} className="flex gap-2 mt-2">
+                    <div key={i} className="flex gap-2 mt-2 items-center">
                       <input
                         value={id}
                         onChange={e => handleAddId(pi, i, e.target.value)}
@@ -514,6 +607,14 @@ function DynamicProducts() {
                             : ''
                         }`}
                       />
+                      <button
+                        type="button"
+                        onClick={() => openScanner('add', pi, i)}
+                        className="p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                        title="Scan Barcode"
+                      >
+                        <FaCamera />
+                      </button>
                       <button
                         type="button"
                         onClick={() => removeIdField(pi, i)}
@@ -787,7 +888,7 @@ function DynamicProducts() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Device IDs</label>
                   {editForm.deviceIds.map((id, i) => (
-                    <div key={i} className="flex gap-2 mt-2">
+                    <div key={i} className="flex gap-2 mt-2 items-center">
                       <input
                         value={id}
                         onChange={e => handleDeviceIdChange(i, e.target.value)}
@@ -798,6 +899,14 @@ function DynamicProducts() {
                             : ''
                         }`}
                       />
+                      <button
+                        type="button"
+                        onClick={() => openScanner('edit', 0, i)}
+                        className="p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                        title="Scan Barcode"
+                      >
+                        <FaCamera />
+                      </button>
                       <button
                         type="button"
                         onClick={() => removeEditDeviceId(i)}
@@ -832,6 +941,39 @@ function DynamicProducts() {
                 className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
               >
                 Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showScanner && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-900 p-6 rounded max-w-lg w-full">
+            <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white">Scan IMEI Barcode</h2>
+            {scannerError ? (
+              <div className="text-red-600 dark:text-red-400 mb-4">{scannerError}</div>
+            ) : (
+              <div className="relative w-full h-64 overflow-hidden">
+                <video
+                  ref={videoRef}
+                  className="w-full h-full object-cover"
+                  autoPlay
+                  playsInline
+                />
+              </div>
+            )}
+            <div className="flex justify-end gap-3 mt-4">
+              <button
+                onClick={() => {
+                  console.log('Closing ZXing scanner');
+                  setShowScanner(false);
+                  setScannerTarget(null);
+                  setScannerError(null);
+                }}
+                className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white"
+              >
+                Cancel
               </button>
             </div>
           </div>

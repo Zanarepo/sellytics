@@ -1,9 +1,9 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../../supabaseClient';
 import { FaEdit, FaTrashAlt, FaPlus, FaCamera } from 'react-icons/fa';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-import BarcodeScannerComponent from 'react-qr-barcode-scanner';
+import { BrowserMultiFormatReader, DecodeHintType, BarcodeFormat } from '@zxing/library';
 
 function DynamicProducts() {
   const storeId = localStorage.getItem('store_id');
@@ -12,12 +12,10 @@ function DynamicProducts() {
   const [products, setProducts] = useState([]);
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
-
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState([
     { name: '', description: '', purchase_price: '', purchase_qty: '', selling_price: '', suppliers_name: '', deviceIds: [''] }
   ]);
-
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({
     name: '',
@@ -27,24 +25,22 @@ function DynamicProducts() {
     suppliers_name: '',
     deviceIds: []
   });
-
   const [showDetail, setShowDetail] = useState(null);
   const [soldDeviceIds, setSoldDeviceIds] = useState([]);
   const [isLoadingSoldStatus, setIsLoadingSoldStatus] = useState(false);
   const [refreshDeviceList, setRefreshDeviceList] = useState(false);
-
-  // Barcode scanning states
   const [showScanner, setShowScanner] = useState(false);
   const [scannerTarget, setScannerTarget] = useState(null); // { modal: 'add'|'edit', productIndex: number, deviceIndex: number }
   const [scannerError, setScannerError] = useState(null);
-
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
   const totalPages = Math.ceil(filtered.length / itemsPerPage);
-
-  // For modal device ID pagination
   const [detailPage, setDetailPage] = useState(1);
   const detailPageSize = 5;
+
+  // ZXing scanner
+  const videoRef = useRef(null);
+  const codeReader = useRef(null);
 
   const filteredDevices = useMemo(() => {
     return showDetail?.deviceList || [];
@@ -135,48 +131,76 @@ function DynamicProducts() {
     }
   }, [showDetail, checkSoldDevices]);
 
-  // Handle barcode scan
-  const handleScan = (err, result) => {
-    if (result) {
-      const scannedIMEI = result.text.trim();
-      if (!validateIMEI(scannedIMEI)) {
-        toast.error('Invalid IMEI: Must be a 15-digit number');
-        return;
-      }
+  // Initialize ZXing scanner
+  useEffect(() => {
+    if (showScanner && videoRef.current) {
+      console.log('Initializing ZXing scanner:', { modal: scannerTarget?.modal, productIndex: scannerTarget?.productIndex, deviceIndex: scannerTarget?.deviceIndex });
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]); // For IMEI barcodes
+      codeReader.current = new BrowserMultiFormatReader(hints);
 
-      if (scannerTarget) {
-        const { modal, productIndex, deviceIndex } = scannerTarget;
+      codeReader.current
+        .decodeFromVideoDevice(null, videoRef.current, (result, err) => {
+          console.log('ZXing scan:', { result, err });
+          if (result) {
+            const scannedIMEI = result.getText().trim();
+            console.log('Scanned IMEI:', scannedIMEI);
+            if (!validateIMEI(scannedIMEI)) {
+              toast.error('Invalid IMEI: Must be a 15-digit number');
+              setScannerError('Invalid IMEI: Must be a 15-digit number');
+              return;
+            }
 
-        if (modal === 'add') {
-          const form = [...addForm];
-          if (form[productIndex].deviceIds.includes(scannedIMEI)) {
-            toast.error(`Device ID "${scannedIMEI}" already exists in this product`);
-            return;
+            if (scannerTarget) {
+              const { modal, productIndex, deviceIndex } = scannerTarget;
+              if (modal === 'add') {
+                const form = [...addForm];
+                if (form[productIndex].deviceIds.includes(scannedIMEI)) {
+                  toast.error(`Device ID "${scannedIMEI}" already exists in this product`);
+                  setScannerError(`Device ID "${scannedIMEI}" already exists`);
+                  return;
+                }
+                form[productIndex].deviceIds[deviceIndex] = scannedIMEI;
+                setAddForm(form);
+              } else if (modal === 'edit') {
+                if (editForm.deviceIds.some((id, i) => i !== deviceIndex && id.trim() === scannedIMEI)) {
+                  toast.error(`Device ID "${scannedIMEI}" already exists in this product`);
+                  setScannerError(`Device ID "${scannedIMEI}" already exists`);
+                  return;
+                }
+                const arr = [...editForm.deviceIds];
+                arr[deviceIndex] = scannedIMEI;
+                setEditForm(prev => ({ ...prev, deviceIds: arr }));
+              }
+
+              setShowScanner(false);
+              setScannerTarget(null);
+              setScannerError(null);
+              toast.success(`Scanned IMEI: ${scannedIMEI}`);
+            }
           }
-          form[productIndex].deviceIds[deviceIndex] = scannedIMEI;
-          setAddForm(form);
-        } else if (modal === 'edit') {
-          if (editForm.deviceIds.some((id, i) => i !== deviceIndex && id.trim() === scannedIMEI)) {
-            toast.error(`Device ID "${scannedIMEI}" already exists in this product`);
-            return;
+          if (err && err.name !== 'NotFoundException') {
+            console.error('ZXing Error:', err.name, err.message);
+            setScannerError(`Camera error: ${err.message}`);
           }
-          const arr = [...editForm.deviceIds];
-          arr[deviceIndex] = scannedIMEI;
-          setEditForm(prev => ({ ...prev, deviceIds: arr }));
+        })
+        .catch((err) => {
+          console.error('ZXing Initialization Error:', err.name, err.message);
+          setScannerError(`Failed to access camera: ${err.message}`);
+        });
+
+      return () => {
+        console.log('Cleaning up ZXing scanner');
+        if (codeReader.current) {
+          codeReader.current.reset();
         }
-
-        setShowScanner(false);
-        setScannerTarget(null);
-        toast.success(`Scanned IMEI: ${scannedIMEI}`);
-      }
+      };
     }
-    if (err && err.message !== 'No barcode or QR code found') {
-      setScannerError('Scanning error: ' + err.message);
-    }
-  };
+  }, [showScanner, scannerTarget, addForm, editForm]);
 
   // Open scanner
   const openScanner = (modal, productIndex, deviceIndex) => {
+    console.log('Opening scanner:', { modal, productIndex, deviceIndex });
     setScannerTarget({ modal, productIndex, deviceIndex });
     setShowScanner(true);
     setScannerError(null);
@@ -930,19 +954,19 @@ function DynamicProducts() {
             {scannerError ? (
               <div className="text-red-600 dark:text-red-400 mb-4">{scannerError}</div>
             ) : (
-              <div className="relative w-full h-64">
-                <BarcodeScannerComponent
-                  width="100%"
-                  height="100%"
-                  onUpdate={handleScan}
-                  facingMode="environment"
-                  constraints={{ facingMode: 'environment' }}
+              <div className="relative w-full h-64 overflow-hidden">
+                <video
+                  ref={videoRef}
+                  className="w-full h-full object-cover"
+                  autoPlay
+                  playsInline
                 />
               </div>
             )}
             <div className="flex justify-end gap-3 mt-4">
               <button
                 onClick={() => {
+                  console.log('Closing ZXing scanner');
                   setShowScanner(false);
                   setScannerTarget(null);
                   setScannerError(null);
